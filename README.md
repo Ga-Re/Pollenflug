@@ -1,10 +1,16 @@
 # Pollenflug Card für Home Assistant
 
+[![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://hacs.xyz/docs/faq/custom_repositories/)
+[![Release](https://img.shields.io/github/v/release/Ga-Re/Pollenflug)](https://github.com/Ga-Re/Pollenflug/releases)
+[![Validate](https://github.com/Ga-Re/Pollenflug/actions/workflows/validate.yml/badge.svg)](https://github.com/Ga-Re/Pollenflug/actions/workflows/validate.yml)
+
 Zeigt die Pollenflugvorhersage des Deutschen Wetterdienstes (DWD) für **heute, morgen und übermorgen**:
 pro Pollenart ein farbiger Balken (0 = keine … 3 = hoch, in halben Stufen), oben ein Hinweis auf die
 höchste Belastung des Tages. Ein Klick auf eine Zeile öffnet den Detail-Dialog des Sensors.
 
 Die Card wird komplett über die Oberfläche eingerichtet – **YAML ist nicht nötig**.
+
+![Pollenflug Card im hellen und dunklen Design](images/screenshot.png)
 
 ## Voraussetzung: Daten
 
@@ -14,10 +20,18 @@ Die Card zeigt nur an. Die Daten liefert die HACS-Integration
 1. In HACS nach „DWD Pollenflug“ suchen, installieren und Home Assistant neu starten.
 2. *Einstellungen → Geräte & Dienste → Integration hinzufügen → DWD Pollenflug*, dann deine Region wählen.
 
-## Installation der Card
+## Installation über HACS (empfohlen)
 
-1. `pollenflug-card.js` nach `/config/www/pollenflug-card.js` kopieren (Ordner `www` ggf. anlegen),
-   z. B. mit dem Add-on *File editor* oder *Samba share*.
+1. HACS öffnen → ⋮ (oben rechts) → **Benutzerdefinierte Repositories**.
+2. Repository: `https://github.com/Ga-Re/Pollenflug`, Typ: **Dashboard** → *Hinzufügen*.
+   (Nicht „Integration“ wählen – sonst meldet HACS „Repository structure … is not compliant“.)
+3. In HACS nach **„Pollenflug Card“** suchen → *Herunterladen*.
+4. Browser neu laden. HACS trägt die Ressource automatisch ein und meldet künftige Updates.
+
+## Manuelle Installation
+
+1. `pollenflug-card.js` aus dem [neuesten Release](https://github.com/Ga-Re/Pollenflug/releases/latest)
+   nach `/config/www/pollenflug-card.js` kopieren (Ordner `www` ggf. anlegen).
 2. *Einstellungen → Dashboards → ⋮ (oben rechts) → Ressourcen → Ressource hinzufügen*
    - URL: `/local/pollenflug-card.js`
    - Typ: **JavaScript-Modul**
@@ -67,3 +81,14 @@ Weitere Schlüssel: `region`, `show_forecast`, `show_legend`, `show_last_update`
 
 Beide brauchen einen lokalen Webserver, z. B. `python3 -m http.server` im Ordner der Dateien,
 dann `http://localhost:8000/demo.html` öffnen.
+
+## Neues Release erstellen
+
+1. Änderungen in [`CHANGELOG.md`](CHANGELOG.md) unter einem neuen Abschnitt `## [1.2.0] - JJJJ-MM-TT`
+   beschreiben und committen.
+2. `./scripts/release.sh 1.2.0` ausführen. Das Skript setzt die Version in `pollenflug-card.js`,
+   committet, legt den Tag `v1.2.0` an und pusht.
+3. Der Workflow *Release* prüft, dass Tag, Version und Changelog zusammenpassen, und erstellt das
+   GitHub-Release mit `pollenflug-card.js` als Anhang. HACS bietet das Update danach automatisch an.
+
+Versionen mit Bindestrich (z. B. `1.2.0-beta.1`) werden als Vorabversion veröffentlicht.

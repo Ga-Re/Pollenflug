@@ -1,0 +1,51 @@
+name: Release
+
+# Wird durch einen Tag wie v1.2.0 ausgelöst (siehe scripts/release.sh)
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version prüfen
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          FILE_VERSION=$(sed -n 's/^const VERSION = "\(.*\)";$/\1/p' pollenflug-card.js)
+          if [ "$VERSION" != "$FILE_VERSION" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME passt nicht zu VERSION \"$FILE_VERSION\" in pollenflug-card.js"
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Syntax prüfen
+        run: node --check pollenflug-card.js
+
+      - name: Release-Notizen aus CHANGELOG.md
+        run: |
+          awk -v v="$VERSION" '
+            index($0, "## [" v "]") == 1 { found = 1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then
+            echo "::error::CHANGELOG.md hat keinen Abschnitt ## [$VERSION]"
+            exit 1
+          fi
+
+      - name: GitHub-Release erstellen
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          FLAGS=""
+          case "$VERSION" in *-*) FLAGS="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" pollenflug-card.js \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file notes.md \
+            --verify-tag $FLAGS
