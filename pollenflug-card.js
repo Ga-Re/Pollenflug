@@ -8,7 +8,7 @@
  *   state_in_2_days  -> Belastung übermorgen
  */
 
-const VERSION = "1.0.0";
+const VERSION = "1.1.0";
 
 const POLLEN = [
   { keys: ["ambrosia"], name: "Ambrosia", icon: "mdi:flower-pollen" },
@@ -37,21 +37,20 @@ const DEFAULT_ATTRIBUTES = {
   day_after: ["state_in_2_days", "state_day_after_tomorrow", "day_after_tomorrow", "forecast_day_after_tomorrow"],
 };
 
-const SORT_OPTIONS = {
-  level: "Nach Belastung",
-  name: "Alphabetisch",
-  none: "Wie konfiguriert",
+const DEFAULTS = {
+  title: "Pollenflug",
+  show_forecast: true,
+  hide_inactive: false,
+  show_legend: false,
+  show_last_update: true,
+  sort: "level",
+  entity_prefix: "sensor.pollenflug_",
 };
 
-const FORM_LABELS = {
-  title: "Titel",
-  entities: "Sensoren (leer = automatisch erkennen)",
-  region: "Region-ID (nur bei automatischer Erkennung)",
-  show_forecast: "Vorhersage anzeigen",
-  hide_inactive: "Pollen ohne Belastung ausblenden",
-  show_legend: "Legende anzeigen",
-  show_last_update: "Stand anzeigen",
-  sort: "Sortierung",
+const SORT_OPTIONS = {
+  level: "Stärkste Belastung zuerst",
+  name: "Alphabetisch",
+  none: "Wie ausgewählt",
 };
 
 const clampLevel = (n) => Math.min(3, Math.max(0, Math.round(n * 2) / 2));
@@ -79,39 +78,35 @@ function findPollen(text) {
   return POLLEN.find((p) => p.keys.some((k) => t.includes(k)));
 }
 
+const regionOf = (entityId) => (entityId.match(/_(\d+)$/) || [])[1] || null;
+
+// Alle Pollen-Sensoren mit passendem Präfix, optional nur aus einer Region
+function discoverEntities(hass, prefix, region) {
+  if (!hass) return [];
+  const wanted = region ? String(region).trim() : null;
+  return Object.keys(hass.states)
+    .filter((id) => id.startsWith((prefix && prefix.trim()) || DEFAULTS.entity_prefix))
+    .filter((id) => !wanted || regionOf(id) === wanted)
+    .sort();
+}
+
+function pollenDisplay(hass, entityId) {
+  const stateObj = hass && hass.states[entityId];
+  const friendly = (stateObj && stateObj.attributes.friendly_name) || "";
+  const pollen = findPollen(entityId) || findPollen(friendly);
+  return {
+    name: pollen ? pollen.name : friendly || entityId,
+    icon: pollen ? pollen.icon : (stateObj && stateObj.attributes.icon) || "mdi:flower-pollen",
+  };
+}
+
 class PollenflugCard extends HTMLElement {
-  static getConfigForm() {
-    return {
-      schema: [
-        { name: "title", selector: { text: {} } },
-        { name: "entities", selector: { entity: { multiple: true, filter: { domain: "sensor" } } } },
-        { name: "region", selector: { text: {} } },
-        {
-          type: "grid",
-          name: "",
-          schema: [
-            { name: "show_forecast", selector: { boolean: {} } },
-            { name: "hide_inactive", selector: { boolean: {} } },
-            { name: "show_legend", selector: { boolean: {} } },
-            { name: "show_last_update", selector: { boolean: {} } },
-          ],
-        },
-        {
-          name: "sort",
-          selector: {
-            select: {
-              mode: "dropdown",
-              options: Object.entries(SORT_OPTIONS).map(([value, label]) => ({ value, label })),
-            },
-          },
-        },
-      ],
-      computeLabel: (schema) => FORM_LABELS[schema.name],
-    };
+  static getConfigElement() {
+    return document.createElement("pollenflug-card-editor");
   }
 
   static getStubConfig() {
-    return { title: "Pollenflug", show_forecast: true, hide_inactive: false, sort: "level" };
+    return { title: DEFAULTS.title };
   }
 
   constructor() {
@@ -126,13 +121,7 @@ class PollenflugCard extends HTMLElement {
       throw new Error("'entities' muss eine Liste sein");
     }
     this._config = {
-      title: "Pollenflug",
-      show_forecast: true,
-      hide_inactive: false,
-      show_legend: false,
-      show_last_update: true,
-      sort: "level",
-      entity_prefix: "sensor.pollenflug_",
+      ...DEFAULTS,
       ...config,
       attributes: { ...config.attributes },
     };
@@ -170,18 +159,12 @@ class PollenflugCard extends HTMLElement {
     if (cfg.entities && cfg.entities.length) {
       return cfg.entities.map((e) => (typeof e === "string" ? { entity: e } : e)).filter((e) => e && e.entity);
     }
-    if (!this._hass) return [];
-    const suffix = cfg.region ? `_${String(cfg.region).trim()}` : null;
-    return Object.keys(this._hass.states)
-      .filter((id) => id.startsWith(cfg.entity_prefix))
-      .filter((id) => !suffix || id.endsWith(suffix))
-      .sort()
-      .map((entity) => ({ entity }));
+    return discoverEntities(this._hass, cfg.entity_prefix, cfg.region).map((entity) => ({ entity }));
   }
 
   _readAttribute(stateObj, day) {
     const configured = this._config.attributes[day];
-    const keys = configured ? [configured] : DEFAULT_ATTRIBUTES[day];
+    const keys = configured && configured.trim() ? [configured.trim()] : DEFAULT_ATTRIBUTES[day];
     for (const key of keys) {
       if (stateObj.attributes[key] !== undefined) return parseLevel(stateObj.attributes[key]);
     }
@@ -192,16 +175,15 @@ class PollenflugCard extends HTMLElement {
     return this._entityConfigs().map((ec, index) => {
       const stateObj = this._hass.states[ec.entity];
       if (!stateObj) return { entity: ec.entity, missing: true, name: ec.name || ec.entity, index };
-      const friendly = stateObj.attributes.friendly_name || "";
-      const pollen = findPollen(ec.entity) || findPollen(friendly);
+      const display = pollenDisplay(this._hass, ec.entity);
       const days = [parseLevel(stateObj.state)];
       if (this._config.show_forecast) {
         days.push(this._readAttribute(stateObj, "tomorrow"), this._readAttribute(stateObj, "day_after"));
       }
       return {
         entity: ec.entity,
-        name: ec.name || (pollen ? pollen.name : friendly || ec.entity),
-        icon: ec.icon || (pollen ? pollen.icon : stateObj.attributes.icon || "mdi:flower-pollen"),
+        name: (ec.name && ec.name.trim()) || display.name,
+        icon: ec.icon || display.icon,
         description: stateObj.attributes.state_today_desc,
         lastUpdate: stateObj.attributes.last_update,
         days,
@@ -298,7 +280,7 @@ class PollenflugCard extends HTMLElement {
 
     let body;
     if (totalRows === 0) {
-      body = `<div class="empty">Keine Pollenflug-Sensoren gefunden.<br>Installiere die Integration „DWD Pollenflug“ oder trage die Sensoren unter <code>entities</code> ein.</div>`;
+      body = `<div class="empty">Keine Pollenflug-Sensoren gefunden.<br>Installiere die Integration „DWD Pollenflug“ oder wähle die Sensoren im Karten-Editor aus.</div>`;
     } else if (rows.length === 0) {
       body = `<div class="empty calm"><ha-icon icon="mdi:emoticon-happy-outline"></ha-icon><span>Aktuell kein Pollenflug – durchatmen!</span></div>`;
     } else {
@@ -393,7 +375,354 @@ class PollenflugCard extends HTMLElement {
   }
 }
 
+/* ---------------------------------------------------------------------------
+ * Visueller Editor: alles per UI einstellbar, kein YAML nötig
+ * ------------------------------------------------------------------------- */
+
+const EDITOR_LABELS = {
+  title: "Titel",
+  mode: "Welche Pollen sollen angezeigt werden?",
+  region: "Region",
+  entity: "Sensor",
+  name: "Eigener Name (optional)",
+  icon: "Eigenes Symbol (optional)",
+  add_entity: "Pollen-Sensor hinzufügen",
+  show_forecast: "Vorhersage für morgen und übermorgen",
+  hide_inactive: "Pollen ohne Belastung ausblenden",
+  show_legend: "Farblegende anzeigen",
+  show_last_update: "Datenstand anzeigen",
+  sort: "Reihenfolge",
+  entity_prefix: "Anfang der Sensor-IDs (automatische Suche)",
+  tomorrow_attribute: "Attribut für morgen",
+  day_after_attribute: "Attribut für übermorgen",
+};
+
+const EDITOR_HELPERS = {
+  entity_prefix: `Standard: ${DEFAULTS.entity_prefix}`,
+  tomorrow_attribute: "Leer lassen für DWD Pollenflug (state_tomorrow)",
+  day_after_attribute: "Leer lassen für DWD Pollenflug (state_in_2_days)",
+};
+
+function regionLabel(hass, entityId, region) {
+  const deviceId = hass.entities && hass.entities[entityId] && hass.entities[entityId].device_id;
+  const device = deviceId && hass.devices && hass.devices[deviceId];
+  const name = device && (device.name_by_user || device.name);
+  return name ? `${name} (${region})` : `Region ${region}`;
+}
+
+class PollenflugCardEditor extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+  }
+
+  setConfig(config) {
+    this._config = { ...config };
+    if (!this._mode) this._mode = Array.isArray(config.entities) && config.entities.length ? "manual" : "auto";
+    this._update();
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    this._update();
+  }
+
+  _entities() {
+    return (this._config.entities || [])
+      .map((e) => (typeof e === "string" ? { entity: e } : { ...e }))
+      .filter((e) => e.entity);
+  }
+
+  _set(changes) {
+    const config = { ...this._config, ...changes };
+    for (const [key, value] of Object.entries(changes)) {
+      const isDefault = key !== "title" && key in DEFAULTS && value === DEFAULTS[key];
+      if (value === undefined || isDefault || (value === "" && key !== "title")) delete config[key];
+    }
+    this._config = config;
+    this.dispatchEvent(new CustomEvent("config-changed", { detail: { config }, bubbles: true, composed: true }));
+    this._update();
+  }
+
+  _setEntities(list) {
+    this._set({
+      entities: list.map((e) => (e.name || e.icon ? Object.fromEntries(Object.entries(e).filter(([, v]) => v)) : e.entity)),
+    });
+  }
+
+  _switchMode(mode) {
+    this._mode = mode;
+    if (mode === "manual") {
+      // Mit den aktuell angezeigten Sensoren starten, dann kann man einfach Unpassendes entfernen
+      const found = discoverEntities(this._hass, this._config.entity_prefix, this._config.region);
+      this._set({ entities: found, region: undefined });
+    } else {
+      this._set({ entities: undefined });
+    }
+  }
+
+  _regionOptions() {
+    const regions = new Map();
+    for (const id of discoverEntities(this._hass, this._config.entity_prefix)) {
+      const region = regionOf(id);
+      if (region && !regions.has(region)) regions.set(region, regionLabel(this._hass, id, region));
+    }
+    const current = this._config.region !== undefined ? String(this._config.region) : null;
+    if (current && !regions.has(current)) regions.set(current, `Region ${current}`);
+    return [
+      { value: "all", label: "Alle Regionen" },
+      ...[...regions.entries()].sort((a, b) => a[1].localeCompare(b[1], "de")).map(([value, label]) => ({ value, label })),
+    ];
+  }
+
+  _generalSchema() {
+    const schema = [
+      { name: "title", selector: { text: {} } },
+      {
+        name: "mode",
+        selector: {
+          select: {
+            mode: "list",
+            options: [
+              { value: "auto", label: "Alle gefundenen Pollen-Sensoren" },
+              { value: "manual", label: "Nur ausgewählte Sensoren (z. B. deine Allergene)" },
+            ],
+          },
+        },
+      },
+    ];
+    if (this._mode === "auto") {
+      schema.push({ name: "region", selector: { select: { mode: "dropdown", options: this._regionOptions() } } });
+    }
+    return schema;
+  }
+
+  _displaySchema() {
+    return [
+      {
+        type: "grid",
+        name: "",
+        schema: [
+          { name: "show_forecast", selector: { boolean: {} } },
+          { name: "hide_inactive", selector: { boolean: {} } },
+          { name: "show_legend", selector: { boolean: {} } },
+          { name: "show_last_update", selector: { boolean: {} } },
+        ],
+      },
+      {
+        name: "sort",
+        selector: {
+          select: { mode: "dropdown", options: Object.entries(SORT_OPTIONS).map(([value, label]) => ({ value, label })) },
+        },
+      },
+      {
+        type: "expandable",
+        name: "",
+        flatten: true,
+        title: "Erweitert (nur für andere Datenquellen nötig)",
+        schema: [
+          { name: "entity_prefix", selector: { text: {} } },
+          { name: "tomorrow_attribute", selector: { text: {} } },
+          { name: "day_after_attribute", selector: { text: {} } },
+        ],
+      },
+    ];
+  }
+
+  // Schema nur bei echten Änderungen neu setzen, damit ha-form nicht unnötig neu aufbaut
+  _assignSchema(form, schema) {
+    const key = JSON.stringify(schema);
+    if (form._schemaKey === key) return;
+    form._schemaKey = key;
+    form.schema = schema;
+  }
+
+  _createForm(onChange) {
+    const form = document.createElement("ha-form");
+    form.computeLabel = (schema) => EDITOR_LABELS[schema.name] || schema.name;
+    form.computeHelper = (schema) => EDITOR_HELPERS[schema.name];
+    form.addEventListener("value-changed", (ev) => {
+      ev.stopPropagation();
+      onChange(ev.detail.value || {});
+    });
+    return form;
+  }
+
+  _build() {
+    this.shadowRoot.innerHTML = `
+      <style>${PollenflugCardEditor.styles}</style>
+      <div class="section" id="general"></div>
+      <div class="section" id="manual">
+        <div class="section-title">Ausgewählte Sensoren</div>
+        <div class="hint" id="manual-hint"></div>
+        <div id="rows"></div>
+        <div id="add"></div>
+      </div>
+      <div class="section" id="display">
+        <div class="section-title">Darstellung</div>
+      </div>`;
+
+    this._generalForm = this._createForm((v) => {
+      if (v.mode && v.mode !== this._mode) return this._switchMode(v.mode);
+      const changes = { title: v.title === undefined ? "" : v.title };
+      if (this._mode === "auto") changes.region = v.region && v.region !== "all" ? v.region : undefined;
+      this._set(changes);
+    });
+    this.shadowRoot.getElementById("general").appendChild(this._generalForm);
+
+    this._addForm = this._createForm((v) => {
+      if (!v.add_entity) return;
+      this._addForm.data = {};
+      this._setEntities([...this._entities(), { entity: v.add_entity }]);
+    });
+    this.shadowRoot.getElementById("add").appendChild(this._addForm);
+
+    this._displayForm = this._createForm((v) => {
+      const attributes = {};
+      if (v.tomorrow_attribute) attributes.tomorrow = v.tomorrow_attribute;
+      if (v.day_after_attribute) attributes.day_after = v.day_after_attribute;
+      this._set({
+        show_forecast: v.show_forecast,
+        hide_inactive: v.hide_inactive,
+        show_legend: v.show_legend,
+        show_last_update: v.show_last_update,
+        sort: v.sort,
+        entity_prefix: v.entity_prefix || undefined,
+        attributes: Object.keys(attributes).length ? attributes : undefined,
+      });
+    });
+    this.shadowRoot.getElementById("display").appendChild(this._displayForm);
+    this._built = true;
+  }
+
+  _update() {
+    if (!this._config || !this._hass) return;
+    if (!this._built) this._build();
+    const cfg = this._config;
+    const entities = this._entities();
+
+    this._generalForm.hass = this._hass;
+    this._assignSchema(this._generalForm, this._generalSchema());
+    this._generalForm.data = {
+      title: cfg.title !== undefined ? cfg.title : DEFAULTS.title,
+      mode: this._mode,
+      region: cfg.region !== undefined && cfg.region !== "" ? String(cfg.region) : "all",
+    };
+
+    const manual = this.shadowRoot.getElementById("manual");
+    manual.hidden = this._mode !== "manual";
+    this.shadowRoot.getElementById("manual-hint").textContent = entities.length
+      ? "Mit den Pfeilen legst du die Reihenfolge fest (gilt bei „Wie ausgewählt“)."
+      : "Noch keine Sensoren ausgewählt – bis dahin zeigt die Karte alle gefundenen an.";
+    this._syncRows(entities);
+
+    this._addForm.hass = this._hass;
+    this._assignSchema(this._addForm, [
+      {
+        name: "add_entity",
+        selector: { entity: { filter: { domain: "sensor" }, exclude_entities: entities.map((e) => e.entity) } },
+      },
+    ]);
+    if (!this._addForm.data) this._addForm.data = {};
+
+    const attributes = cfg.attributes || {};
+    this._displayForm.hass = this._hass;
+    this._assignSchema(this._displayForm, this._displaySchema());
+    this._displayForm.data = {
+      ...DEFAULTS,
+      ...cfg,
+      tomorrow_attribute: attributes.tomorrow || "",
+      day_after_attribute: attributes.day_after || "",
+    };
+  }
+
+  _syncRows(entities) {
+    const rowsEl = this.shadowRoot.getElementById("rows");
+    const key = entities.map((e) => e.entity).join("|");
+    // Zeilen nur bei Struktur-Änderungen neu aufbauen, damit Eingabefelder den Fokus behalten
+    if (key !== this._rowsKey) {
+      this._rowsKey = key;
+      rowsEl.innerHTML = "";
+      entities.forEach((e, i) => rowsEl.appendChild(this._createRow(e, i, entities.length)));
+    }
+    [...rowsEl.children].forEach((row, i) => {
+      const display = pollenDisplay(this._hass, entities[i].entity);
+      row.querySelector(".row-title").textContent = entities[i].name || display.name;
+      row.querySelector(".row-icon").setAttribute("icon", entities[i].icon || display.icon);
+      row.form.hass = this._hass;
+      row.form.data = { entity: entities[i].entity, name: entities[i].name || "", icon: entities[i].icon || "" };
+    });
+  }
+
+  _createRow(entry, index, count) {
+    const display = pollenDisplay(this._hass, entry.entity);
+    const row = document.createElement("div");
+    row.className = "entity-row";
+    row.innerHTML = `
+      <div class="row-head">
+        <ha-icon class="row-icon" icon="${escapeHtml(entry.icon || display.icon)}"></ha-icon>
+        <span class="row-title">${escapeHtml(entry.name || display.name)}</span>
+        <button class="icon-btn" data-act="up" title="Nach oben" ${index === 0 ? "disabled" : ""}><ha-icon icon="mdi:arrow-up"></ha-icon></button>
+        <button class="icon-btn" data-act="down" title="Nach unten" ${index === count - 1 ? "disabled" : ""}><ha-icon icon="mdi:arrow-down"></ha-icon></button>
+        <button class="icon-btn" data-act="remove" title="Entfernen"><ha-icon icon="mdi:delete-outline"></ha-icon></button>
+      </div>`;
+    row.form = this._createForm((v) => {
+      const list = this._entities();
+      if (!v.entity) list.splice(index, 1);
+      else list[index] = { entity: v.entity, name: v.name || "", icon: v.icon || "" };
+      this._setEntities(list);
+    });
+    row.form.schema = [
+      { name: "entity", selector: { entity: { filter: { domain: "sensor" } } } },
+      {
+        type: "grid",
+        name: "",
+        schema: [
+          { name: "name", selector: { text: {} } },
+          { name: "icon", selector: { icon: { placeholder: display.icon } } },
+        ],
+      },
+    ];
+    row.appendChild(row.form);
+    row.querySelectorAll("button").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        const list = this._entities();
+        const target = btn.dataset.act === "up" ? index - 1 : index + 1;
+        if (btn.dataset.act === "remove") list.splice(index, 1);
+        else [list[index], list[target]] = [list[target], list[index]];
+        this._setEntities(list);
+      })
+    );
+    return row;
+  }
+
+  static get styles() {
+    return `
+      :host { display: block; }
+      .section { margin-bottom: 24px; }
+      .section[hidden] { display: none; }
+      .section-title { font-weight: 500; font-size: 1rem; color: var(--primary-text-color); margin: 0 0 8px; }
+      .hint { font-size: 0.875rem; color: var(--secondary-text-color); margin-bottom: 12px; }
+      .entity-row {
+        border: 1px solid var(--divider-color, rgba(127,127,127,0.25)); border-radius: 12px;
+        padding: 6px 12px 12px; margin-bottom: 10px;
+      }
+      .row-head { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+      .row-icon { color: var(--secondary-text-color); --mdc-icon-size: 20px; margin-right: 4px; }
+      .row-title { flex: 1; font-weight: 500; color: var(--primary-text-color); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .icon-btn {
+        display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; padding: 0;
+        border: none; border-radius: 50%; background: none; cursor: pointer;
+        color: var(--secondary-text-color); --mdc-icon-size: 20px;
+      }
+      .icon-btn:hover:not(:disabled) { background: var(--secondary-background-color, rgba(127,127,127,0.1)); color: var(--primary-text-color); }
+      .icon-btn:disabled { opacity: 0.3; cursor: default; }
+    `;
+  }
+}
+
 customElements.define("pollenflug-card", PollenflugCard);
+customElements.define("pollenflug-card-editor", PollenflugCardEditor);
 
 window.customCards = window.customCards || [];
 window.customCards.push({
@@ -401,7 +730,7 @@ window.customCards.push({
   name: "Pollenflug",
   description: "Pollenflugvorhersage des DWD für heute, morgen und übermorgen",
   preview: true,
-  documentationURL: "https://github.com/mampfes/hacs_dwd_pollenflug",
+  documentationURL: "https://github.com/Ga-Re/Pollenflug",
 });
 
 console.info(`%c POLLENFLUG-CARD %c v${VERSION} `, "color:#fff;background:#fb8c00;font-weight:700", "color:#fb8c00");

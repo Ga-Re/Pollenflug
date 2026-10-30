@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pollenflug Card Editor Demo</title>
+<style>
+  :root {
+    --primary-text-color: #212121; --secondary-text-color: #727272; --disabled-text-color: #bdbdbd;
+    --divider-color: rgba(0,0,0,.12); --card-background-color: #fff; --secondary-background-color: #f2f2f2;
+    --primary-background-color: #fafafa;
+  }
+  body { margin: 0; padding: 24px 16px; font-family: Roboto, system-ui, sans-serif; background: var(--primary-background-color); color: var(--primary-text-color); }
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; max-width: 1000px; margin: 0 auto; }
+  @media (max-width: 720px) { .layout { grid-template-columns: 1fr; } }
+  .panel { background: var(--card-background-color); border: 1px solid var(--divider-color); border-radius: 12px; padding: 16px; }
+  h2 { font-size: .9rem; font-weight: 500; color: var(--secondary-text-color); margin: 0 0 12px; text-transform: uppercase; letter-spacing: .05em; }
+  ha-card { display: block; background: var(--card-background-color); border-radius: 12px; border: 1px solid var(--divider-color); }
+  pre { font-size: 12px; background: var(--secondary-background-color); padding: 10px; border-radius: 8px; white-space: pre-wrap; }
+  .note { max-width: 1000px; margin: 0 auto 16px; font-size: .85rem; color: var(--secondary-text-color); }
+</style>
+</head>
+<body>
+<p class="note">Vereinfachte Nachbildung des Home-Assistant-Karteneditors. Die Eingabefelder sind Platzhalter für die echten HA-Felder.</p>
+<div class="layout">
+  <div class="panel"><h2>Editor</h2><pollenflug-card-editor id="editor"></pollenflug-card-editor></div>
+  <div>
+    <div class="panel" style="padding:0;border:none;background:none"><h2>Vorschau</h2><pollenflug-card id="card"></pollenflug-card></div>
+    <h2 style="margin-top:20px">Gespeicherte Konfiguration</h2>
+    <pre id="config"></pre>
+  </div>
+</div>
+
+<script type="module">
+  import * as mdi from "https://cdn.jsdelivr.net/npm/@mdi/js@7.4.47/mdi.js";
+  const toKey = (name) => "mdi" + name.replace("mdi:", "").split("-").map((p) => p[0].toUpperCase() + p.slice(1)).join("");
+  customElements.define("ha-icon", class extends HTMLElement {
+    static get observedAttributes() { return ["icon"]; }
+    attributeChangedCallback() { this.connectedCallback(); }
+    connectedCallback() {
+      const path = mdi[toKey(this.getAttribute("icon") || "")] || mdi.mdiHelpCircleOutline;
+      this.style.cssText = "display:inline-flex;width:var(--mdc-icon-size,24px);height:var(--mdc-icon-size,24px)";
+      this.innerHTML = `<svg viewBox="0 0 24 24" style="width:100%;height:100%;fill:currentColor"><path d="${path}"/></svg>`;
+    }
+  });
+  customElements.define("ha-card", class extends HTMLElement {});
+
+  // Minimaler Nachbau von <ha-form> (nur die hier genutzten Selektoren)
+  customElements.define("ha-form", class extends HTMLElement {
+    constructor() { super(); this.attachShadow({ mode: "open" }); this._data = {}; }
+    set schema(v) { this._schema = v; this._render(); }
+    get schema() { return this._schema; }
+    set data(v) { this._data = v || {}; this._sync(); }
+    get data() { return this._data; }
+    set hass(v) { this._hass = v; if (!this._rendered) this._render(); }
+    _emit(name, value) {
+      const d = { ...this._data };
+      if (value === undefined || value === "") delete d[name]; else d[name] = value;
+      this._data = d;
+      this.dispatchEvent(new CustomEvent("value-changed", { detail: { value: d }, bubbles: true, composed: true }));
+    }
+    _field(item) {
+      const label = (this.computeLabel && this.computeLabel(item)) || item.name;
+      const helper = this.computeHelper && this.computeHelper(item);
+      const wrap = document.createElement("label");
+      wrap.className = "field";
+      const sel = item.selector || {};
+      let input;
+      if (sel.boolean) {
+        wrap.className = "field bool";
+        input = Object.assign(document.createElement("input"), { type: "checkbox" });
+        input.addEventListener("change", () => this._emit(item.name, input.checked));
+        wrap.append(input, document.createTextNode(label));
+        input.dataset.name = item.name; input.dataset.kind = "bool";
+        return wrap;
+      }
+      wrap.append(Object.assign(document.createElement("span"), { textContent: label, className: "lbl" }));
+      if (sel.select && sel.select.mode === "list") {
+        const group = document.createElement("div");
+        sel.select.options.forEach((o) => {
+          const l = document.createElement("label"); l.className = "radio";
+          const r = Object.assign(document.createElement("input"), { type: "radio", name: this._uid + item.name, value: o.value });
+          r.dataset.name = item.name; r.dataset.kind = "radio";
+          r.addEventListener("change", () => this._emit(item.name, o.value));
+          l.append(r, document.createTextNode(o.label)); group.append(l);
+        });
+        wrap.append(group);
+        return wrap;
+      }
+      if (sel.select || sel.entity) {
+        input = document.createElement("select");
+        const opts = sel.select ? sel.select.options : [{ value: "", label: "– Sensor wählen –" }, ...Object.keys(this._hass.states)
+          .filter((id) => id.startsWith("sensor.") && !(sel.entity.exclude_entities || []).includes(id))
+          .map((id) => ({ value: id, label: `${this._hass.states[id].attributes.friendly_name} (${id})` }))];
+        opts.forEach((o) => input.append(Object.assign(document.createElement("option"), { value: o.value, textContent: o.label })));
+        input.addEventListener("change", () => this._emit(item.name, input.value));
+      } else {
+        input = Object.assign(document.createElement("input"), { type: "text", placeholder: (sel.icon && sel.icon.placeholder) || "" });
+        input.addEventListener("input", () => this._emit(item.name, input.value));
+      }
+      input.dataset.name = item.name;
+      wrap.append(input);
+      if (helper) wrap.append(Object.assign(document.createElement("small"), { textContent: helper }));
+      return wrap;
+    }
+    _renderItems(schema, parent) {
+      for (const item of schema) {
+        if (item.type === "grid") {
+          const g = document.createElement("div"); g.className = "grid"; parent.append(g); this._renderItems(item.schema, g);
+        } else if (item.type === "expandable") {
+          const d = document.createElement("details");
+          d.append(Object.assign(document.createElement("summary"), { textContent: item.title }));
+          parent.append(d); this._renderItems(item.schema, d);
+        } else parent.append(this._field(item));
+      }
+    }
+    _render() {
+      if (!this._schema || !this._hass) return;
+      this._uid = this._uid || Math.random().toString(36).slice(2);
+      this._rendered = true;
+      this.shadowRoot.innerHTML = `<style>
+        :host{display:block;font-size:14px}
+        .field{display:flex;flex-direction:column;gap:4px;margin-bottom:12px}
+        .field.bool{flex-direction:row;align-items:center;gap:8px}
+        .lbl{font-size:12px;color:var(--secondary-text-color)}
+        input[type=text],select{font:inherit;padding:9px 10px;border:1px solid var(--divider-color);border-radius:6px;background:var(--card-background-color);color:var(--primary-text-color)}
+        .radio{display:flex;align-items:center;gap:8px;padding:3px 0}
+        .grid{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}
+        small{color:var(--secondary-text-color);font-size:11px}
+        details{border:1px solid var(--divider-color);border-radius:8px;padding:8px 12px}
+        summary{cursor:pointer;margin-bottom:8px}
+      </style>`;
+      this._renderItems(this._schema, this.shadowRoot);
+      this._sync();
+    }
+    _sync() {
+      if (!this.shadowRoot) return;
+      this.shadowRoot.querySelectorAll("[data-name]").forEach((el) => {
+        if (el === this.shadowRoot.activeElement) return;
+        const v = this._data[el.dataset.name];
+        if (el.dataset.kind === "bool") el.checked = !!v;
+        else if (el.dataset.kind === "radio") el.checked = el.value === v;
+        else el.value = v ?? "";
+      });
+    }
+  });
+
+  await import("./pollenflug-card.js");
+
+  const now = new Date(); now.setHours(11, 0, 0, 0);
+  const states = {}, entities = {};
+  const add = (pollen, name, region, today, tomorrow, after) => {
+    const id = `sensor.pollenflug_${pollen}_${region}`;
+    states[id] = { entity_id: id, state: String(today), attributes: { friendly_name: `Pollenflug ${name} ${region}`,
+      state_tomorrow: tomorrow, state_in_2_days: after, last_update: now.toISOString() } };
+    entities[id] = { device_id: `dwd_${region}` };
+  };
+  [["ambrosia","Ambrosia",0,0,0],["beifuss","Beifuß",0.5,0,0],["birke","Birke",2.5,3,2],["erle","Erle",1,1.5,1],
+   ["esche","Esche",2,1.5,1],["graeser","Gräser",3,2.5,2],["hasel","Hasel",0,0.5,1],["roggen","Roggen",1.5,2,2.5]]
+    .forEach(([p, n, ...v]) => { add(p, n, "31", ...v); add(p, n, "50", ...v.map((x) => Math.max(0, x - 1))); });
+  states["sensor.wohnzimmer_temperatur"] = { state: "21.4", attributes: { friendly_name: "Wohnzimmer Temperatur" } };
+  const hass = { states, entities, devices: { dwd_31: { name: "Westl. Niedersachsen/Bremen" }, dwd_50: { name: "Brandenburg und Berlin" } },
+    language: "de", locale: { language: "de" } };
+
+  const editor = document.getElementById("editor"), card = document.getElementById("card"), out = document.getElementById("config");
+  let config = { type: "custom:pollenflug-card", ...customElements.get("pollenflug-card").getStubConfig(hass) };
+  const apply = () => { card.setConfig(config); card.hass = hass; out.textContent = JSON.stringify(config, null, 2); };
+  editor.addEventListener("config-changed", (e) => { config = e.detail.config; editor.setConfig(config); apply(); });
+  editor.hass = hass; editor.setConfig(config); apply();
+  window.__demo = { editor, card, hass, get config() { return config; } };
+</script>
+</body>
+</html>
