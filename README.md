@@ -92,3 +92,7 @@ dann `http://localhost:8000/demo.html` öffnen.
    GitHub-Release mit `pollenflug-card.js` als Anhang. HACS bietet das Update danach automatisch an.
 
 Versionen mit Bindestrich (z. B. `1.2.0-beta.1`) werden als Vorabversion veröffentlicht.
+
+## Lizenz
+
+[MIT](LICENSE)
