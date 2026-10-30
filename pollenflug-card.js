@@ -8,7 +8,7 @@
  *   state_in_2_days  -> Belastung übermorgen
  */
 
-const VERSION = "1.1.0";
+const VERSION = "1.1.1";
 
 const POLLEN = [
   { keys: ["ambrosia"], name: "Ambrosia", icon: "mdi:flower-pollen" },
