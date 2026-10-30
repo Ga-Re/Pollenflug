@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pollenflug Card Demo</title>
+<style>
+  :root {
+    --primary-text-color: #212121; --secondary-text-color: #727272; --disabled-text-color: #bdbdbd;
+    --divider-color: rgba(0,0,0,.12); --card-background-color: #fff; --secondary-background-color: #f2f2f2;
+    --primary-background-color: #fafafa;
+  }
+  body.dark {
+    --primary-text-color: #e1e1e1; --secondary-text-color: #9b9b9b; --disabled-text-color: #6f6f6f;
+    --divider-color: rgba(225,225,225,.12); --card-background-color: #1c1c1c; --secondary-background-color: #282828;
+    --primary-background-color: #111;
+  }
+  body { margin: 0; padding: 24px 16px; font-family: Roboto, system-ui, sans-serif; background: var(--primary-background-color); color: var(--primary-text-color); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; max-width: 1100px; margin: 0 auto; }
+  .bar { max-width: 1100px; margin: 0 auto 16px; display: flex; gap: 12px; align-items: center; justify-content: space-between; }
+  h1 { font-size: 1.2rem; margin: 0; }
+  button { font: inherit; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--divider-color); background: var(--card-background-color); color: var(--primary-text-color); cursor: pointer; }
+  ha-card { display: block; background: var(--card-background-color); border-radius: 12px; border: 1px solid var(--divider-color); }
+  ha-icon { display: inline-flex; width: var(--mdc-icon-size, 24px); height: var(--mdc-icon-size, 24px); }
+  ha-icon svg { width: 100%; height: 100%; fill: currentColor; }
+  .label { font-size: .8rem; color: var(--secondary-text-color); margin: 0 0 6px 4px; }
+</style>
+</head>
+<body>
+<div class="bar"><h1>Pollenflug Card – Demo</h1><button id="theme">Dark / Light</button></div>
+<div class="grid">
+  <div><div class="label">Standard (automatische Erkennung)</div><pollenflug-card id="c1"></pollenflug-card></div>
+  <div><div class="label">Nur Allergene, nur aktive, mit Legende</div><pollenflug-card id="c2"></pollenflug-card></div>
+  <div><div class="label">Nur heute</div><pollenflug-card id="c3"></pollenflug-card></div>
+  <div><div class="label">Keine Belastung (hide_inactive)</div><pollenflug-card id="c4"></pollenflug-card></div>
+</div>
+
+<script type="module">
+  import * as mdi from "https://cdn.jsdelivr.net/npm/@mdi/js@7.4.47/mdi.js";
+  const toKey = (name) => "mdi" + name.replace("mdi:", "").split("-").map((p) => p[0].toUpperCase() + p.slice(1)).join("");
+  customElements.define("ha-icon", class extends HTMLElement {
+    static get observedAttributes() { return ["icon"]; }
+    attributeChangedCallback() { this.connectedCallback(); }
+    connectedCallback() {
+      const path = mdi[toKey(this.getAttribute("icon") || "")] || mdi.mdiHelpCircleOutline;
+      this.style.cssText = "display:inline-flex;width:var(--mdc-icon-size,24px);height:var(--mdc-icon-size,24px)";
+      this.innerHTML = `<svg viewBox="0 0 24 24" style="width:100%;height:100%;fill:currentColor"><path d="${path}"/></svg>`;
+    }
+  });
+  if (!customElements.get("ha-card")) customElements.define("ha-card", class extends HTMLElement {});
+  await import("./pollenflug-card.js");
+
+  const now = new Date();
+  now.setHours(11, 0, 0, 0);
+  const s = (pollen, name, today, tomorrow, after, region = "31") => [
+    `sensor.pollenflug_${pollen}_${region}`,
+    { entity_id: `sensor.pollenflug_${pollen}_${region}`, state: String(today),
+      attributes: { friendly_name: `Pollenflug ${name} ${region}`, state_tomorrow: tomorrow, state_in_2_days: after,
+        last_update: now.toISOString(), unit_of_measurement: "risk" } },
+  ];
+  const states = Object.fromEntries([
+    s("ambrosia", "Ambrosia", 0, 0, 0), s("beifuss", "Beifuß", 0.5, 0, 0), s("birke", "Birke", 2.5, 3, 2),
+    s("erle", "Erle", 1, 1.5, 1), s("esche", "Esche", 2, 1.5, 1), s("graeser", "Gräser", 3, 2.5, 2),
+    s("hasel", "Hasel", 0, 0.5, 1), s("roggen", "Roggen", 1.5, 2, 2.5),
+  ]);
+  const calm = Object.fromEntries(["birke", "graeser", "hasel"].map((p) => s(p, p, 0, 0, 0, "50")));
+  const hass = { states: { ...states, ...calm }, language: "de", locale: { language: "de" } };
+
+  const setup = (id, config) => { const el = document.getElementById(id); el.setConfig(config); el.hass = hass; };
+  setup("c1", { region: "31" });
+  setup("c2", { title: "Meine Allergene", entities: ["sensor.pollenflug_birke_31", "sensor.pollenflug_graeser_31", { entity: "sensor.pollenflug_hasel_31", name: "Haselnuss" }, "sensor.pollenflug_ambrosia_31"], hide_inactive: true, show_legend: true });
+  setup("c3", { title: "Pollen heute", show_forecast: false, entities: ["sensor.pollenflug_birke_31", "sensor.pollenflug_graeser_31", "sensor.pollenflug_roggen_31", "sensor.pollenflug_erle_31"] });
+  setup("c4", { region: "50", hide_inactive: true });
+
+  document.addEventListener("hass-more-info", (e) => console.log("more-info", e.detail.entityId));
+  document.getElementById("theme").onclick = () => document.body.classList.toggle("dark");
+</script>
+</body>
+</html>
