@@ -55,16 +55,17 @@ const SORT_OPTIONS = {
 
 const clampLevel = (n) => Math.min(3, Math.max(0, Math.round(n * 2) / 2));
 
+// null = keine Daten. Negative Werte (DWD: "-1") bedeuten "keine Vorhersage für diesen Tag".
 function parseLevel(raw) {
   if (raw === undefined || raw === null) return null;
-  if (typeof raw === "number") return Number.isFinite(raw) ? clampLevel(raw) : null;
+  if (typeof raw === "number") return Number.isFinite(raw) && raw >= 0 ? clampLevel(raw) : null;
   const s = String(raw).trim().replace(/,/g, ".");
   if (!s || s === "unknown" || s === "unavailable") return null;
   // DWD-Schreibweise "1-2" => 1,5
   const range = s.match(/^(\d(?:\.\d+)?)\s*-\s*(\d(?:\.\d+)?)$/);
   if (range) return clampLevel((parseFloat(range[1]) + parseFloat(range[2])) / 2);
   const n = parseFloat(s);
-  return Number.isFinite(n) ? clampLevel(n) : null;
+  return Number.isFinite(n) && n >= 0 ? clampLevel(n) : null;
 }
 
 const levelInfo = (level) =>
@@ -212,7 +213,7 @@ class PollenflugCard extends HTMLElement {
     } catch (e) {
       weekday = "Übermorgen";
     }
-    return this._config.show_forecast ? ["Heute", "Morgen", weekday] : ["Heute"];
+    return ["Heute", "Morgen", weekday];
   }
 
   _formatLastUpdate(rows) {
@@ -240,13 +241,14 @@ class PollenflugCard extends HTMLElement {
     }
     const today = levelInfo(row.days[0]);
     const desc = row.description || today.label;
-    const cells = row.days
-      .map((level, i) => {
+    const cells = this._dayIdx
+      .map((i) => {
+        const level = row.days[i];
         const info = levelInfo(level);
         const label = this._dayLabelsCache[i];
         return `<div class="cell" title="${escapeHtml(`${label}: ${info.label}`)}">
           ${this._renderBar(level)}
-          ${this._config.show_forecast ? "" : `<span class="cell-label">${escapeHtml(info.label)}</span>`}
+          ${this._forecast ? "" : `<span class="cell-label">${escapeHtml(info.label)}</span>`}
         </div>`;
       })
       .join("");
@@ -255,7 +257,7 @@ class PollenflugCard extends HTMLElement {
         <div class="icon" style="--c:${today.color}"><ha-icon icon="${escapeHtml(row.icon)}"></ha-icon></div>
         <div class="text">
           <div class="name">${escapeHtml(row.name)}</div>
-          ${this._config.show_forecast ? `<div class="sub">${escapeHtml(desc)}</div>` : ""}
+          ${this._forecast ? `<div class="sub">${escapeHtml(desc)}</div>` : ""}
         </div>
       </div>
       ${cells}
@@ -272,6 +274,15 @@ class PollenflugCard extends HTMLElement {
     this._rowCount = rows.length;
     this._dayLabelsCache = this._dayLabels();
 
+    // Vorhersagetage, für die kein Sensor Daten liefert (z. B. nur heute + morgen), ganz ausblenden
+    this._dayIdx = [0];
+    if (cfg.show_forecast) {
+      for (const i of [1, 2]) {
+        if (rows.some((r) => !r.missing && r.days[i] !== null)) this._dayIdx.push(i);
+      }
+    }
+    this._forecast = this._dayIdx.length > 1;
+
     const maxToday = rows.reduce((max, r) => (r.missing || r.days[0] === null ? max : Math.max(max, r.days[0])), -1);
     const chip =
       maxToday >= 0
@@ -284,7 +295,7 @@ class PollenflugCard extends HTMLElement {
     } else if (rows.length === 0) {
       body = `<div class="empty calm"><ha-icon icon="mdi:emoticon-happy-outline"></ha-icon><span>Aktuell kein Pollenflug – durchatmen!</span></div>`;
     } else {
-      const heads = this._dayLabelsCache.map((l) => `<div class="dayhead">${escapeHtml(l)}</div>`).join("");
+      const heads = this._dayIdx.map((i) => `<div class="dayhead">${escapeHtml(this._dayLabelsCache[i])}</div>`).join("");
       body = `<div class="row head"><div></div>${heads}</div>${rows.map((r) => this._renderRow(r)).join("")}`;
     }
 
@@ -299,7 +310,7 @@ class PollenflugCard extends HTMLElement {
     this.shadowRoot.innerHTML = `
       <style>${PollenflugCard.styles}</style>
       <ha-card>
-        <div class="card ${cfg.show_forecast ? "forecast" : "today-only"}">
+        <div class="card ${this._forecast ? "forecast" : "today-only"}" style="--days:${this._dayIdx.length}">
           ${cfg.title || chip ? `<div class="header"><div class="title">${escapeHtml(cfg.title || "")}</div>${chip}</div>` : ""}
           <div class="rows">${body}</div>
           ${footer}
@@ -325,7 +336,7 @@ class PollenflugCard extends HTMLElement {
     return `
       :host { display: block; }
       ha-card { height: 100%; overflow: hidden; }
-      .card { padding: 16px 12px 12px; --cols: minmax(96px, 1fr) repeat(3, minmax(30px, 56px)); }
+      .card { padding: 16px 12px 12px; --cols: minmax(96px, 1fr) repeat(var(--days, 3), minmax(30px, 56px)); }
       .card.today-only { --cols: minmax(0, 1fr) minmax(110px, 40%); }
       .header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 8px 10px; }
       .title { font-size: var(--ha-card-header-font-size, 1.25rem); font-weight: 500; color: var(--ha-card-header-color, var(--primary-text-color)); line-height: 1.3; }
@@ -398,6 +409,7 @@ const EDITOR_LABELS = {
 };
 
 const EDITOR_HELPERS = {
+  show_forecast: "Tage, für die der Sensor keine Vorhersage liefert, werden automatisch ausgeblendet",
   entity_prefix: `Standard: ${DEFAULTS.entity_prefix}`,
   tomorrow_attribute: "Leer lassen für DWD Pollenflug (state_tomorrow)",
   day_after_attribute: "Leer lassen für DWD Pollenflug (state_in_2_days)",

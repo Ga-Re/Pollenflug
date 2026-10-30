@@ -2,6 +2,14 @@
 
 Alle nennenswerten Änderungen an der Pollenflug Card. Versionen folgen [Semantic Versioning](https://semver.org/lang/de/).
 
+## [1.1.1] - 2026-10-30
+
+### Verbessert
+- Liefert ein Sensor nur Werte für heute und morgen, zeigt die Karte nur diese beiden Spalten statt einer leeren Übermorgen-Spalte.
+
+### Behoben
+- Der DWD-Wert „-1“ (keine Vorhersage für diesen Tag) wurde fälschlich als „keine Belastung“ angezeigt.
+
 ## [1.1.0] - 2026-10-30
 
 ### Neu
